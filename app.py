@@ -690,6 +690,25 @@ def apply_style() -> None:
         }
         div[data-testid="stTabs"] button[role="tab"] {
             min-height: 44px;
+            color: var(--cherry-deep);
+            background: #ffffff;
+            border: 1px solid #f2d2d8;
+            border-radius: 8px;
+            margin-right: 4px;
+            opacity: 1;
+        }
+        div[data-testid="stTabs"] button[role="tab"] p {
+            color: var(--cherry-deep) !important;
+            font-weight: 900;
+            font-size: 15px;
+            white-space: nowrap;
+        }
+        div[data-testid="stTabs"] button[role="tab"][aria-selected="true"] {
+            background: var(--cherry);
+            border-color: var(--cherry);
+        }
+        div[data-testid="stTabs"] button[role="tab"][aria-selected="true"] p {
+            color: #ffffff !important;
         }
         @media (max-width: 900px) {
             .product-grid, .notice-grid, .detail-hero, .trust-grid, .step-list { grid-template-columns: 1fr; }
@@ -735,15 +754,26 @@ def apply_style() -> None:
                 position: sticky;
                 top: calc(0.4rem + env(safe-area-inset-top));
                 z-index: 50;
-                overflow-x: auto;
-                flex-wrap: nowrap;
+                display: grid;
+                grid-template-columns: repeat(5, minmax(0, 1fr));
+                overflow: visible;
+                column-gap: 4px;
                 box-shadow: 0 6px 18px rgba(159, 18, 57, 0.08);
+                border: 1px solid #f2d2d8;
+                border-radius: 8px;
+                padding: 5px;
             }
             div[data-testid="stTabs"] button[role="tab"] {
-                min-width: 66px;
+                width: 100%;
+                min-width: 0;
                 min-height: 42px;
-                padding-left: 8px;
-                padding-right: 8px;
+                padding-left: 4px;
+                padding-right: 4px;
+                margin-right: 0;
+            }
+            div[data-testid="stTabs"] button[role="tab"] p {
+                font-size: 14px;
+                line-height: 1.1;
             }
             .stButton button, .stDownloadButton button { min-height: 48px; }
         }
