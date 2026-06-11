@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: new-farm-cherry-orders
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: streamlit run app.py --server.port $PORT --server.address 0.0.0.0 --server.headless true
+    envVars:
+      - key: CHERRY_ADMIN_PASSWORD
+        sync: false
+      - key: CHERRY_BANK_ACCOUNT
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
