@@ -486,7 +486,7 @@ def save_uploaded_images(uploaded_files, prefix: str) -> list[str]:
 
 
 def apply_style() -> None:
-    st.set_page_config(page_title=APP_NAME, page_icon="🍒", layout="wide")
+    st.set_page_config(page_title=APP_NAME, page_icon="🍒", layout="wide", initial_sidebar_state="collapsed")
     st.markdown(
         """
         <style>
@@ -502,8 +502,13 @@ def apply_style() -> None:
             --paper: #ffffff;
         }
         .stApp { background: #fffafa; color: var(--ink); }
+        header[data-testid="stHeader"] { height: 0; background: transparent; }
+        div[data-testid="stToolbar"], #MainMenu, footer { display: none; visibility: hidden; }
         h1, h2, h3 { letter-spacing: 0; }
-        .block-container { padding-top: 1.2rem; }
+        .block-container {
+            padding-top: calc(1.2rem + env(safe-area-inset-top));
+            padding-bottom: calc(2rem + env(safe-area-inset-bottom));
+        }
         .brand-bar {
             display: flex;
             align-items: center;
@@ -542,7 +547,7 @@ def apply_style() -> None:
         }
         .hero {
             position: relative;
-            min-height: 250px;
+            min-height: 220px;
             border-radius: 8px;
             overflow: hidden;
             background-size: cover;
@@ -677,17 +682,70 @@ def apply_style() -> None:
             border-radius: 8px;
             font-weight: 900;
         }
+        div[data-testid="stTabs"] div[role="tablist"] {
+            background: #fffafa;
+            border-bottom: 1px solid #f2d2d8;
+            padding: 6px 0;
+            gap: 4px;
+        }
+        div[data-testid="stTabs"] button[role="tab"] {
+            min-height: 44px;
+        }
         @media (max-width: 900px) {
             .product-grid, .notice-grid, .detail-hero, .trust-grid, .step-list { grid-template-columns: 1fr; }
-            .hero { min-height: 270px; }
+            .hero { min-height: 210px; }
             .hero::after { background: linear-gradient(180deg, rgba(68,16,28,.78), rgba(68,16,28,.38)); }
         }
         @media (max-width: 640px) {
-            .block-container { padding-left: 14px; padding-right: 14px; }
-            .hero-content { padding: 24px 18px; }
-            .notice-item, .product-body, .detail-panel, .detail-section { padding: 13px; }
+            .block-container {
+                padding-top: calc(3rem + env(safe-area-inset-top));
+                padding-left: 12px;
+                padding-right: 12px;
+            }
+            .brand-bar { padding: 4px 0 8px; align-items: flex-start; }
             .brand-name { font-size: 22px; }
-            .brand-mark { min-width: 78px; font-size: 14px; }
+            .brand-sub { font-size: 13px; }
+            .brand-mark { min-width: 74px; font-size: 13px; padding: 7px 8px; }
+            .hero { min-height: 168px; margin-bottom: 8px; }
+            .hero-content { padding: 18px 14px; }
+            .hero-title { font-size: 30px; margin-bottom: 8px; }
+            .hero-copy { font-size: 14px; line-height: 1.42; margin-bottom: 0; }
+            .hero-tags { gap: 5px; margin-bottom: 8px; }
+            .hero-tag { min-height: 24px; padding: 3px 8px; font-size: 12px; }
+            .notice-grid {
+                grid-template-columns: repeat(3, minmax(0, 1fr));
+                gap: 6px;
+                margin: 8px 0 10px;
+            }
+            .notice-item { padding: 9px 7px; }
+            .notice-label { font-size: 11px; margin-bottom: 3px; }
+            .notice-value { font-size: 13px; line-height: 1.25; }
+            .easy-order { display: none; }
+            .easy-card { padding: 11px; }
+            .easy-card h3 { font-size: 18px; margin-bottom: 7px; }
+            .step-list { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; }
+            .step { padding: 8px 6px; }
+            .step-num { font-size: 10px; }
+            .step-title { font-size: 12px; margin: 3px 0; }
+            .step-copy { display: none; }
+            .trust-grid { display: none; }
+            .notice-item, .product-body, .detail-panel, .detail-section { padding: 12px; }
+            .product-image { aspect-ratio: 16 / 9; }
+            div[data-testid="stTabs"] div[role="tablist"] {
+                position: sticky;
+                top: calc(0.4rem + env(safe-area-inset-top));
+                z-index: 50;
+                overflow-x: auto;
+                flex-wrap: nowrap;
+                box-shadow: 0 6px 18px rgba(159, 18, 57, 0.08);
+            }
+            div[data-testid="stTabs"] button[role="tab"] {
+                min-width: 66px;
+                min-height: 42px;
+                padding-left: 8px;
+                padding-right: 8px;
+            }
+            .stButton button, .stDownloadButton button { min-height: 48px; }
         }
         </style>
         """,
@@ -1319,7 +1377,13 @@ def admin_page() -> None:
     if not admin_login():
         return
     st.title("판매 관리자")
-    if st.sidebar.button("로그아웃"):
+    st.sidebar.markdown(f"**{BRAND_NAME} 관리자**")
+    st.sidebar.caption("구매자에게는 관리자 화면이 보이지 않습니다.")
+    if st.sidebar.button("구매자 화면으로 돌아가기", use_container_width=True):
+        st.session_state["admin_logged_in"] = False
+        st.query_params.clear()
+        st.rerun()
+    if st.sidebar.button("로그아웃", use_container_width=True):
         st.session_state["admin_logged_in"] = False
         st.rerun()
     tab_dash, tab_products, tab_orders, tab_payments, tab_delivery, tab_csv = st.tabs(
@@ -1342,14 +1406,13 @@ def admin_page() -> None:
 def main() -> None:
     init_db()
     apply_style()
-    mode = st.sidebar.radio("화면 선택", ["구매자", "관리자"])
-    st.sidebar.markdown(f"**{BRAND_NAME}**")
-    st.sidebar.caption(f"입금 계좌: {BANK_ACCOUNT}")
-    if mode == "구매자":
-        buyer_page()
-    else:
+    is_admin_url = st.query_params.get("admin") == "1"
+    if is_admin_url:
         admin_page()
+    else:
+        buyer_page()
 
 
 if __name__ == "__main__":
     main()
+
