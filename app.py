@@ -113,6 +113,19 @@ def init_db() -> None:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS order_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                order_id INTEGER NOT NULL,
+                product_id INTEGER NOT NULL,
+                product_name TEXT NOT NULL,
+                unit_price INTEGER NOT NULL,
+                quantity INTEGER NOT NULL,
+                line_total INTEGER NOT NULL
+            )
+            """
+        )
         migrate_products(conn)
 
         count = conn.execute("SELECT COUNT(*) FROM products").fetchone()[0]
@@ -317,15 +330,47 @@ def set_product_auto_status(conn: sqlite3.Connection, product_id: int) -> None:
         conn.execute("UPDATE products SET status = '품절', stock = 0 WHERE id = ?", (product_id,))
 
 
+def build_order_summary(items: list[dict]) -> str:
+    return ", ".join(f"{item['product_name']} {item['quantity']}개" for item in items)
+
+
+def get_order_items(conn: sqlite3.Connection, order_id: int) -> list[sqlite3.Row]:
+    return conn.execute("SELECT * FROM order_items WHERE order_id = ? ORDER BY id", (order_id,)).fetchall()
+
+
 def create_order(form: dict) -> tuple[bool, str, str | None]:
     with get_conn() as conn:
-        product = conn.execute("SELECT * FROM products WHERE id = ?", (form["product_id"],)).fetchone()
-        if not product:
-            return False, "상품을 찾을 수 없습니다.", None
-        if product["status"] != "판매중" or product["stock"] < form["quantity"]:
-            return False, "재고가 부족하거나 품절된 상품입니다.", None
+        raw_items = form.get("items")
+        if not raw_items:
+            raw_items = [{"product_id": form["product_id"], "quantity": form["quantity"]}]
 
-        total_price = product["price"] * form["quantity"]
+        selected_items = []
+        for raw_item in raw_items:
+            quantity = int(raw_item.get("quantity", 0))
+            if quantity <= 0:
+                continue
+            product = conn.execute("SELECT * FROM products WHERE id = ?", (raw_item["product_id"],)).fetchone()
+            if not product:
+                return False, "상품을 찾을 수 없습니다.", None
+            if product["status"] != "판매중" or product["stock"] < quantity:
+                return False, f"{product['name']} 재고가 부족하거나 품절되었습니다.", None
+            selected_items.append(
+                {
+                    "product_id": product["id"],
+                    "product_name": product["name"],
+                    "unit_price": product["price"],
+                    "quantity": quantity,
+                    "line_total": product["price"] * quantity,
+                }
+            )
+
+        if not selected_items:
+            return False, "주문할 상품 수량을 1개 이상 선택해주세요.", None
+
+        total_price = sum(item["line_total"] for item in selected_items)
+        total_quantity = sum(item["quantity"] for item in selected_items)
+        product_summary = build_order_summary(selected_items)
+        first_product_id = selected_items[0]["product_id"]
         created_at = now_text()
         cur = conn.execute(
             """
@@ -339,9 +384,9 @@ def create_order(form: dict) -> tuple[bool, str, str | None]:
             (
                 form["customer_name"],
                 form["phone"],
-                product["id"],
-                product["name"],
-                form["quantity"],
+                first_product_id,
+                product_summary,
+                total_quantity,
                 total_price,
                 form["receive_type"],
                 form["address"],
@@ -355,8 +400,16 @@ def create_order(form: dict) -> tuple[bool, str, str | None]:
         order_id = cur.lastrowid
         order_no = make_order_no(order_id)
         conn.execute("UPDATE orders SET order_no = ? WHERE id = ?", (order_no, order_id))
-        conn.execute("UPDATE products SET stock = stock - ? WHERE id = ?", (form["quantity"], product["id"]))
-        set_product_auto_status(conn, product["id"])
+        for item in selected_items:
+            conn.execute(
+                """
+                INSERT INTO order_items (order_id, product_id, product_name, unit_price, quantity, line_total)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (order_id, item["product_id"], item["product_name"], item["unit_price"], item["quantity"], item["line_total"]),
+            )
+            conn.execute("UPDATE products SET stock = stock - ? WHERE id = ?", (item["quantity"], item["product_id"]))
+            set_product_auto_status(conn, item["product_id"])
 
     order = one("SELECT * FROM orders WHERE order_no = ?", (order_no,))
     if order:
@@ -383,7 +436,12 @@ def update_order_status(order_id: int, new_status: str) -> None:
         conn.execute(f"UPDATE orders SET {', '.join(updates)} WHERE id = ?", params)
 
         if new_status == "취소" and order["status"] != "취소":
-            conn.execute("UPDATE products SET stock = stock + ?, status = '판매중' WHERE id = ?", (order["quantity"], order["product_id"]))
+            items = get_order_items(conn, order_id)
+            if items:
+                for item in items:
+                    conn.execute("UPDATE products SET stock = stock + ?, status = '판매중' WHERE id = ?", (item["quantity"], item["product_id"]))
+            else:
+                conn.execute("UPDATE products SET stock = stock + ?, status = '판매중' WHERE id = ?", (order["quantity"], order["product_id"]))
 
 
 def cancel_order(order_id: int) -> None:
@@ -1025,11 +1083,12 @@ def product_list_view() -> None:
         disabled = product["status"] != "판매중" or product["stock"] <= 0
         if col_order.button("주문하기", key=f"card_order_{product['id']}", type="primary", use_container_width=True, disabled=disabled):
             st.session_state["selected_product_id"] = product["id"]
-            st.session_state["buyer_tab_hint"] = "주문"
-            st.info("상단의 주문 탭에서 선택한 상품으로 주문을 이어가세요.")
+            st.session_state[f"order_qty_{product['id']}"] = max(int(st.session_state.get(f"order_qty_{product['id']}", 0)), 1)
+            st.session_state["buyer_view"] = "주문"
+            st.rerun()
         if col_detail.button("상세보기", key=f"card_detail_{product['id']}", use_container_width=True):
             st.session_state["detail_product_id"] = product["id"]
-            st.session_state["buyer_tab_hint"] = "상세"
+            st.session_state["buyer_view"] = "상세"
             st.rerun()
     st.markdown("</div>", unsafe_allow_html=True)
 
@@ -1086,8 +1145,9 @@ def product_detail_view() -> None:
     disabled = product["status"] != "판매중" or product["stock"] <= 0
     if st.button("이 상품 주문하기", key=f"detail_order_{product['id']}", type="primary", use_container_width=True, disabled=disabled):
         st.session_state["selected_product_id"] = product["id"]
-        st.session_state["buyer_tab_hint"] = "주문"
-        st.success("주문 탭에서 선택한 상품으로 주문을 이어가세요.")
+        st.session_state[f"order_qty_{product['id']}"] = max(int(st.session_state.get(f"order_qty_{product['id']}", 0)), 1)
+        st.session_state["buyer_view"] = "주문"
+        st.rerun()
 
 
 def buyer_order_view() -> None:
@@ -1097,23 +1157,45 @@ def buyer_order_view() -> None:
         st.info("현재 주문 가능한 상품이 없습니다.")
         return
 
-    labels = {f"{p['name']} {p['weight']} - {money(p['price'])} / 재고 {p['stock']}개": p for p in products}
-    product_ids = [p["id"] for p in products]
     selected_product_id = st.session_state.get("selected_product_id")
-    selected_index = product_ids.index(selected_product_id) if selected_product_id in product_ids else 0
 
     with st.form("order_form"):
+        st.markdown("#### 상품과 수량")
+        selected_items = []
+        for product in products:
+            default_quantity = 1 if selected_product_id == product["id"] else 0
+            st.markdown(
+                f"""
+                <div class="detail-section">
+                    <b>{esc(product['name'])}</b><br>
+                    <span>{esc(product['weight'])} · {money(product['price'])} · 남은 재고 {int(product['stock'])}개</span><br>
+                    <span>{esc(product_summary(product))}</span>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            quantity = st.number_input(
+                f"{product['name']} 수량",
+                min_value=0,
+                max_value=int(product["stock"]),
+                value=default_quantity,
+                step=1,
+                key=f"order_qty_{product['id']}",
+            )
+            if int(quantity) > 0:
+                selected_items.append({"product_id": product["id"], "quantity": int(quantity), "price": int(product["price"]), "name": product["name"]})
+
         customer_name = st.text_input("주문자 이름")
         phone = st.text_input("연락처")
-        selected_label = st.selectbox("상품 선택", list(labels.keys()), index=selected_index)
-        selected_product = labels[selected_label]
-        quantity = st.number_input("수량", min_value=1, max_value=max(1, selected_product["stock"]), step=1)
         receive_type = st.radio("수령 방식", RECEIVE_TYPES, horizontal=True)
         address = st.text_area("주소 또는 수령 장소", placeholder="직접수령이면 수령 장소 메모를 적어주세요.")
         receive_date = st.date_input("희망 수령일")
         request_note = st.text_area("요청사항", placeholder="문 앞에 두기, 오후 배달 희망 등")
         depositor_name = st.text_input("입금자명", value=customer_name)
-        st.markdown(f"<div class='big-total'>총 결제금액 {money(selected_product['price'] * quantity)}</div>", unsafe_allow_html=True)
+        total_price = sum(item["price"] * item["quantity"] for item in selected_items)
+        selected_summary = ", ".join(f"{item['name']} {item['quantity']}개" for item in selected_items) or "선택된 상품 없음"
+        st.markdown(f"<p><b>선택 상품</b><br>{esc(selected_summary)}</p>", unsafe_allow_html=True)
+        st.markdown(f"<div class='big-total'>총 결제금액 {money(total_price)}</div>", unsafe_allow_html=True)
         submitted = st.form_submit_button("주문하기", type="primary", use_container_width=True)
 
     if submitted:
@@ -1121,12 +1203,14 @@ def buyer_order_view() -> None:
         if not all(required):
             st.error("주문자 이름, 연락처, 입금자명을 입력해주세요.")
             return
+        if not selected_items:
+            st.error("주문할 상품 수량을 1개 이상 선택해주세요.")
+            return
         ok, message, order_no = create_order(
             {
                 "customer_name": customer_name.strip(),
                 "phone": phone.strip(),
-                "product_id": selected_product["id"],
-                "quantity": int(quantity),
+                "items": [{"product_id": item["product_id"], "quantity": item["quantity"]} for item in selected_items],
                 "receive_type": receive_type,
                 "address": address.strip(),
                 "receive_date": str(receive_date),
@@ -1136,7 +1220,7 @@ def buyer_order_view() -> None:
         )
         if ok and order_no:
             st.session_state["last_order_no"] = order_no
-            st.success(message)
+            st.session_state["buyer_view"] = "완료"
             st.rerun()
         else:
             st.error(message)
@@ -1199,18 +1283,28 @@ def buyer_page() -> None:
     notice_box()
     easy_order_guide()
     trust_points()
-    tab_products, tab_detail, tab_order, tab_done, tab_lookup = st.tabs(["상품", "상세", "주문", "완료", "조회"])
-    if st.session_state.get("buyer_tab_hint"):
-        st.caption(f"안내: {st.session_state.pop('buyer_tab_hint')} 탭에서 계속 진행할 수 있습니다.")
-    with tab_products:
+    views = ["상품", "상세", "주문", "완료", "조회"]
+    current_view = st.session_state.get("buyer_view", "상품")
+    if current_view not in views:
+        current_view = "상품"
+        st.session_state["buyer_view"] = current_view
+
+    nav_cols = st.columns(len(views))
+    for idx, view_name in enumerate(views):
+        button_type = "primary" if current_view == view_name else "secondary"
+        if nav_cols[idx].button(view_name, key=f"buyer_nav_{view_name}", type=button_type, use_container_width=True):
+            st.session_state["buyer_view"] = view_name
+            st.rerun()
+
+    if current_view == "상품":
         product_list_view()
-    with tab_detail:
+    elif current_view == "상세":
         product_detail_view()
-    with tab_order:
+    elif current_view == "주문":
         buyer_order_view()
-    with tab_done:
+    elif current_view == "완료":
         order_complete_view()
-    with tab_lookup:
+    else:
         order_lookup_view()
 
 
@@ -1530,4 +1624,5 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
 
